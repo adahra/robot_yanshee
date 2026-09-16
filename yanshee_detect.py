@@ -19,7 +19,7 @@ API_KEY = "OLLAMA_API_KEY"
 MODEL_NAME = "nemotron-3-ultra"
 
 # Masukkan API Key Groq untuk Whisper (Gratis di console.groq.com)
-GROQ_API_KEY = "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"  
+GROQ_API_KEY = "API_KEY_GROQ"  
 GROQ_WHISPER_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 
 # =====================================================================
