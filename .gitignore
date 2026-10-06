@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Audio sementara (dihasilkan yanshee_detect.py)
+temp_input.wav
+temp_response.mp3
+user_voice.wav
+*.wav
+!*.md
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

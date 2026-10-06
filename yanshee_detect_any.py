@@ -1,4 +1,5 @@
 import json
+import os
 import time
 import random
 import urllib.request
@@ -10,8 +11,17 @@ import YanAPI  # Menggunakan file SDK Python
 # =====================================================================
 ROBOT_IP = "127.0.0.1"
 OLLAMA_CLOUD_URL = "https://ollama.com/v1/chat/completions"
-API_KEY = "e6b3974837f9431aac72d48de5365545.KE3UcFrOk8NA0yPLm5rUqwNu"
+API_KEY = os.environ.get("OLLAMA_API_KEY", "")
 MODEL_NAME = "nemotron-3-ultra"
+REQUEST_TIMEOUT = 30
+
+NO_SPEECH_LIMIT = 3
+SCAN_DELAY = 1.5
+POST_INTERACTION_DELAY = 5
+GESTURE_SCAN_DELAY = 1
+
+VALID_ACTIONS = ("wave", "bow", "walk", "raise", "crouch", "reset",
+                 "turn around", "joget")
 
 daftar_lagu = [
     'rollerblade.mp3',
@@ -45,7 +55,7 @@ tools = [
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["wave", "bow", "walk", "raise", "crouch", "reset"],
+                        "enum": ["wave", "bow", "walk", "raise", "crouch", "reset", "turn around", "joget"],
                         "description": "Jenis gerakan robot."
                     }
                 },
@@ -57,12 +67,18 @@ tools = [
 
 
 def execute_robot_action(action_name):
+    if action_name not in VALID_ACTIONS:
+        print("[FISIK] Aksi tidak dikenal: {}".format(action_name))
+        return "Gerakan tidak dikenal."
     print("[FISIK] Menjalankan gerakan: {}".format(action_name))
     success = YanAPI.sync_play_motion(name=action_name)
     return "Gerakan berhasil." if success else "Gerakan gagal."
 
 
 def ask_ollama_cloud(user_prompt, gender_context):
+    if not API_KEY:
+        print("[ERROR] OLLAMA_API_KEY belum diset.")
+        return "Kunci API belum dikonfigurasi."
     headers = {
         "Authorization": "Bearer {}".format(API_KEY),
         "Content-Type": "application/json"
@@ -88,20 +104,31 @@ def ask_ollama_cloud(user_prompt, gender_context):
         OLLAMA_CLOUD_URL, data=data_bytes, headers=headers)
 
     try:
-        with urllib.request.urlopen(req) as response:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as response:
             res_body = json.loads(response.read().decode("utf-8"))
-            message = res_body['choices'][0]['message']
+            choices = res_body.get("choices") or []
+            if not choices:
+                print("[ERROR] Respons API tanpa choices: {}".format(res_body))
+                return "Maaf, saya tidak mendapat jawaban dari cloud."
+            message = choices[0].get("message") or {}
 
             if message.get("tool_calls"):
                 for tool_call in message["tool_calls"]:
-                    if tool_call["function"]["name"] == "move_robot":
-                        arguments = json.loads(
-                            tool_call["function"]["arguments"])
+                    func = (tool_call or {}).get("function") or {}
+                    if func.get("name") == "move_robot":
+                        try:
+                            arguments = json.loads(func.get("arguments") or "{}")
+                        except ValueError:
+                            print("[ERROR] Argumen tool_call bukan JSON: {}".format(func.get("arguments")))
+                            continue
                         action = arguments.get("action")
                         execute_robot_action(action)
                         return "Saya sudah melakukan gerakan {} untuk Anda!".format(action)
 
-            return message.get("content", "")
+            content = message.get("content", "") or ""
+            if not content.strip():
+                return "Maaf, saya tidak menangkap maksud Anda."
+            return content
 
     except urllib.error.HTTPError as e:
         error_msg = e.read().decode("utf-8")
@@ -112,52 +139,20 @@ def ask_ollama_cloud(user_prompt, gender_context):
         return "Koneksi ke cloud terganggu."
 
 
-def play_music_and_loop_motion_sync(music_name, motion_name):
+def play_music_and_loop_motion_fast_stop(music_name, motion_name, interactive=False):
     print("[INFO] Memutar musik: {}".format(music_name))
-    res_music = YanAPI.start_play_music(name=music_name)
+    res_music = YanAPI.start_play_music(name=music_name) or {}
 
     if res_music.get("code") != 0:
         print("[ERROR] Gagal memutar musik: {}".format(res_music.get("msg")))
         return
-
-    while True:
-        # Cek status musik sebelum memulai gerakan siklus berikutnya
-        music_state = YanAPI.get_media_music_state()
-        data = music_state.get("data", {})
-
-        status = data.get("status", "")
-        current_song = data.get("name", "")
-
-        if status != "run" or current_song != music_name:
-            print("[STATUS] Musik berhenti! Menghentikan rutinitas menari...")
-            break
-
-        print("[INFO] Menjalankan tarian (sync): {}".format(motion_name))
-        # Program tertahan di sini sampai 1 siklus gerakan selesai
-        YanAPI.sync_play_motion(name=motion_name)
-
-    YanAPI.sync_play_motion(name="reset")
-
-
-def play_music_and_loop_motion_fast_stop(music_name, motion_name):
-    print("[INFO] Memutar musik: {}".format(music_name))
-    res_music = YanAPI.start_play_music(name=music_name)
-
-    if res_music.get("code") != 0:
-        print("[ERROR] Gagal memutar musik: {}".format(res_music.get("msg")))
-        return
-
-    # time.sleep(0.5)
-
-    # print("[INFO] Mencoba mulai menari: {}".format(motion_name))
-    # YanAPI.start_play_motion(name=motion_name)
 
     while True:
         # Cek gestur ThumbsDown di awal siklus mode interaktif
         if interactive:
             current_gesture = get_current_gesture()  # Gunakan helper
-            # Pakai .lower()[cite: 5]
-            if current_gesture.lower() == "thumbsdown":
+            # Pakai .lower()
+            if (current_gesture or "").lower() == "thumbsdown":
                 print(
                     "[STOP] Gestur ThumbsDown terdeteksi. Menghentikan mode interaktif...")
                 YanAPI.sync_do_tts(tts="Mode interaktif dihentikan.")
@@ -165,8 +160,8 @@ def play_music_and_loop_motion_fast_stop(music_name, motion_name):
                 YanAPI.sync_play_motion(name="reset")
                 break
 
-        music_state = YanAPI.get_media_music_state()
-        data = music_state.get("data", {})
+        music_state = YanAPI.get_media_music_state() or {}
+        data = music_state.get("data", {}) or {}
 
         status = data.get("status", "")
         current_song = data.get("name", "")
@@ -179,23 +174,12 @@ def play_music_and_loop_motion_fast_stop(music_name, motion_name):
         print("[INFO] Mencoba mulai menari: {}".format(motion_name))
         YanAPI.sync_play_motion(name=motion_name)
 
-        # Jeda ditingkatkan ke 1.5 - 2.0 detik agar 1 siklus gerakan joget sempat berjalan
-        # time.sleep(1.5)
-
     YanAPI.sync_play_motion(name="reset")
 
 
 # =====================================================================
 # LOOP UTAMA INTERAKSI
 # =====================================================================
-def main_loop():
-    print("[INIT] Menghubungkan ke robot Yanshee...")
-    YanAPI.yan_api_init(ROBOT_IP)
-    YanAPI.sync_do_tts(
-        tts="Sistem deteksi setiap wajah dan kecerdasan buatan siap berjalan.")
-    random_dance(interactive=False)
-
-
 def main_loop_interactive():
     random_dance(interactive=True)
 
@@ -207,8 +191,8 @@ def random_dance(interactive=False):
         # Cek gestur ThumbsDown di awal siklus mode interaktif
         if interactive:
             current_gesture = get_current_gesture()  # Gunakan helper
-            # Pakai .lower()[cite: 5]
-            if current_gesture.lower() == "thumbsdown":
+            # Pakai .lower()
+            if (current_gesture or "").lower() == "thumbsdown":
                 print(
                     "[STOP] Gestur ThumbsDown terdeteksi. Menghentikan mode interaktif...")
                 YanAPI.sync_do_tts(tts="Mode interaktif dihentikan.")
@@ -267,20 +251,19 @@ def random_dance(interactive=False):
             else:
                 no_speech_count += 1
                 print(
-                    "[INFO] Tidak ada suara terdeteksi. Hitungan tanpa suara: {}/3".format(no_speech_count))
+                    "[INFO] Tidak ada suara terdeteksi. Hitungan tanpa suara: {}/{}".format(no_speech_count, NO_SPEECH_LIMIT))
 
-                if no_speech_count >= 3:
+                if no_speech_count >= NO_SPEECH_LIMIT:
                     print("[AKSI] 3x tidak bersuara! Robot berjalan ke depan...")
                     YanAPI.sync_do_tts(
                         tts="Tidak ada suara. Saya akan berjalan.")
-                    # YanAPI.sync_play_motion(name="walk", direction="forward", speed="normal", repeat=3)
                     YanAPI.sync_play_motion(
                         name="turn around", direction="left", repeat=3)
                     YanAPI.sync_play_motion(name="reset")
                     no_speech_count = 0
 
             print("[INTERAKSI SELESAI] Memberikan jeda sebelum memindai ulang...")
-            time.sleep(5)
+            time.sleep(POST_INTERACTION_DELAY)
 
         else:
             print(
@@ -300,13 +283,12 @@ def random_dance(interactive=False):
             lagu_terpilih = random.choice(daftar_lagu)
             print("-> Memutar lagu acak & joget:", lagu_terpilih)
 
-            play_music_and_loop_motion_fast_stop(lagu_terpilih, "joget")
-            # play_music_and_loop_motion_sync(lagu_terpilih, "joget")
+            play_music_and_loop_motion_fast_stop(lagu_terpilih, "joget", interactive=interactive)
 
             print("-> Reset posisi")
             YanAPI.sync_play_motion(name="reset")
 
-        time.sleep(1.5)
+        time.sleep(SCAN_DELAY)
 
 
 def get_current_gesture():
@@ -317,8 +299,8 @@ def get_current_gesture():
 
     # Jika return berupa dictionary dan ber-code 0 (normal)
     if isinstance(res, dict) and res.get("code") == 0:
-        gesture_name = res.get("data", {}).get("gesture", "")
-        return gesture_name
+        gesture_name = (res.get("data") or {}).get("gesture", "")
+        return gesture_name or ""
 
     # Jika SDK YanAPI sudah mem-parse dan langsung mengembalikan string
     elif isinstance(res, str):
@@ -345,8 +327,8 @@ def gesture_control_loop():
 
         if gesture:
             print("[GESTURE CONTROL TERDETEKSI]: {}".format(gesture))
-            # Normalisasi ke huruf kecil[cite: 5]
-            gesture_lower = gesture.lower()
+            # Normalisasi ke huruf kecil
+            gesture_lower = (gesture or "").lower()
 
             if gesture_lower == "thumbsup":
                 print("[AKSI] Gestur ThumbsUp terdeteksi! Memulai interaksi AI...")
@@ -364,8 +346,31 @@ def gesture_control_loop():
                 YanAPI.stop_play_music()
                 time.sleep(2)
 
-            time.sleep(1)
+        time.sleep(GESTURE_SCAN_DELAY)
+
+
+def shutdown_robot():
+    try:
+        YanAPI.stop_play_music()
+    except Exception:
+        pass
+    try:
+        YanAPI.stop_play_motion()
+    except Exception:
+        pass
+    try:
+        YanAPI.sync_play_motion(name="reset")
+    except Exception:
+        pass
+    try:
+        YanAPI.set_robot_led(type="button", color="red", mode="breath")
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
-    gesture_control_loop()
+    try:
+        gesture_control_loop()
+    except KeyboardInterrupt:
+        print("\n[EXIT] Dihentikan pengguna. Mengembalikan robot ke posisi aman...")
+        shutdown_robot()
