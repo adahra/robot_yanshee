@@ -1,0 +1,33 @@
+{
+    "ROBOT_IP": "127.0.0.1",
+    "OLLAMA_CLOUD_URL": "https://ollama.com/v1/chat/completions",
+    "MODEL_NAME": "nemotron-3-ultra",
+    "REQUEST_TIMEOUT": 30,
+    "NO_SPEECH_LIMIT": 3,
+    "SCAN_DELAY": 1.5,
+    "POST_INTERACTION_DELAY": 5,
+    "GESTURE_SCAN_DELAY": 1,
+    "BATTERY_LOW_THRESHOLD": 15,
+    "VALID_ACTIONS": ["wave", "bow", "walk", "raise", "crouch", "reset", "turn around", "joget"],
+    "daftar_lagu": [
+        "rollerblade.mp3",
+        "ghost.mp3",
+        "bojo_galak.mp3",
+        "kelingan_mantan.mp3",
+        "house.mp3",
+        "fukai_mori.mp3",
+        "seventeen.mp3",
+        "fortune.mp3",
+        "cincin.mp3",
+        "drop_dead.mp3",
+        "uare.mp3",
+        "lenka.mp3",
+        "sunflower.mp3",
+        "hindia.mp3",
+        "wind.mp3"
+    ],
+    "LOG_FILE": "yanshee.log",
+    "LOG_LEVEL": "INFO",
+    "FALLBACK_MOTION": "reset",
+    "FALLBACK_TTS": "Maaf, saya tidak dapat terhubung ke layanan cloud. Silakan coba lagi nanti."
+}
