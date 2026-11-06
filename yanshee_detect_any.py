@@ -29,6 +29,29 @@ BATTERY_LOW_THRESHOLD = _cfg.get("BATTERY_LOW_THRESHOLD", 15)
 VALID_ACTIONS = tuple(_cfg.get("VALID_ACTIONS", ["wave", "bow", "walk", "raise",
                                                     "crouch", "reset", "turn around", "joget"]))
 
+# Arah yang didukung tiap gerakan (lihat docstring YanAPI.sync_play_motion).
+# Gerakan yang tidak tercantum tidak memakai parameter direction.
+ACTION_DIRECTIONS = {
+    "raise": ("left", "right", "both"),
+    "wave": ("left", "right", "both"),
+    "walk": ("forward", "backward", "left", "right"),
+    "turn around": ("left", "right"),
+}
+# Dipakai bila LLM tidak menyebut arah untuk gerakan yang butuh arah.
+DEFAULT_DIRECTIONS = {
+    "walk": "forward",
+    "turn around": "right",
+}
+DIRECTION_LABELS = {
+    "left": "ke kiri",
+    "right": "ke kanan",
+    "both": "dua arah",
+    "forward": "ke depan",
+    "backward": "ke belakang",
+}
+MIN_REPEAT = 1
+MAX_REPEAT = 100
+
 daftar_lagu = _cfg.get("daftar_lagu", [])
 
 FALLBACK_MOTION = _cfg.get("FALLBACK_MOTION", "reset")
@@ -56,7 +79,7 @@ tools = [
         "type": "function",
         "function": {
             "name": "move_robot",
-            "description": "Gunakan fungsi ini jika pengguna meminta robot melakukan gerakan fisik.",
+            "description": "Gunakan fungsi ini jika pengguna meminta robot melakukan gerakan fisik. Sertakan arah dan jumlah pengulangan bila pengguna menyebutkannya.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -64,6 +87,17 @@ tools = [
                         "type": "string",
                         "enum": list(VALID_ACTIONS),
                         "description": "Jenis gerakan robot."
+                    },
+                    "direction": {
+                        "type": "string",
+                        "enum": ["left", "right", "both", "forward", "backward"],
+                        "description": "Arah gerakan. Hanya dipakai untuk wave/raise (left, right, both), walk (forward, backward, left, right), dan turn around (left, right). Default: walk=forward, turn around=right."
+                    },
+                    "repeat": {
+                        "type": "integer",
+                        "minimum": MIN_REPEAT,
+                        "maximum": MAX_REPEAT,
+                        "description": "Berapa kali gerakan diulang (1-100). Default 1."
                     }
                 },
                 "required": ["action"]
@@ -72,19 +106,158 @@ tools = [
     }
 ]
 
+# Registry executor: memetakan nama tool -> callable(dict_argumen) -> (teks, is_fallback)
+tool_executors = {}
 
-def execute_robot_action(action_name):
+
+def _normalize_direction(action_name, direction):
+    """Validasi arah gerakan dan kembalikan nilai yang aman untuk SDK.
+
+    Gerakan yang tidak memakai arah akan selalu mengembalikan string kosong.
+    Arah yang tidak valid diganti dengan default gerakan tersebut (jika ada).
+    """
+    if not isinstance(direction, str):
+        return ""
+    direction = direction.strip().lower()
+    allowed = ACTION_DIRECTIONS.get(action_name)
+    if not allowed:
+        return ""
+    if not direction:
+        return DEFAULT_DIRECTIONS.get(action_name, "")
+    if direction not in allowed:
+        fallback = DEFAULT_DIRECTIONS.get(action_name, "")
+        log.warning(
+            "[FISIK] Arah '{}' tidak valid untuk '{}' (pilihan: {}). Memakai '{}'.".format(
+                direction, action_name, ", ".join(allowed), fallback or "default"))
+        return fallback
+    return direction
+
+
+def _normalize_repeat(repeat):
+    """Batasi jumlah pengulangan ke rentang yang didukung SDK (1-100)."""
+    try:
+        repeat = int(repeat)
+    except (TypeError, ValueError):
+        log.warning("[FISIK] Nilai repeat tidak valid: {!r}. Memakai {}.".format(repeat, MIN_REPEAT))
+        return MIN_REPEAT
+    if repeat < MIN_REPEAT:
+        return MIN_REPEAT
+    if repeat > MAX_REPEAT:
+        log.warning("[FISIK] repeat {} melebihi batas, dipotong ke {}.".format(repeat, MAX_REPEAT))
+        return MAX_REPEAT
+    return repeat
+
+
+def _describe_move(action_name, direction, repeat):
+    """Buat deskripsi singkat gerakan untuk teks balasan ke pengguna."""
+    description = str(action_name)
+    direction_label = DIRECTION_LABELS.get(direction)
+    if direction_label:
+        description += " " + direction_label
+    if repeat > 1:
+        description += " sebanyak {} kali".format(repeat)
+    return description
+
+
+def execute_robot_action(action_name, direction="", repeat=1):
     if action_name not in VALID_ACTIONS:
         log.warning("[FISIK] Aksi tidak dikenal: {}".format(action_name))
         print("[FISIK] Aksi tidak dikenal: {}".format(action_name))
         return False
-    print("[FISIK] Menjalankan gerakan: {}".format(action_name))
-    log.info("[FISIK] Menjalankan gerakan: {}".format(action_name))
+    direction = _normalize_direction(action_name, direction)
+    repeat = _normalize_repeat(repeat)
+    print("[FISIK] Menjalankan gerakan: {} (direction='{}', repeat={})".format(
+        action_name, direction, repeat))
+    log.info("[FISIK] Menjalankan gerakan: {} (direction='{}', repeat={})".format(
+        action_name, direction, repeat))
     try:
-        return bool(YanAPI.sync_play_motion(name=action_name))
+        return bool(YanAPI.sync_play_motion(
+            name=action_name, direction=direction, repeat=repeat))
     except Exception as e:
         log.error("[FISIK] Gerakan gagal: {}".format(str(e)))
         return False
+
+
+def _execute_move_robot(arguments):
+    """Executor bawaan untuk tool 'move_robot'.
+
+    Mengembalikan tuple (teks_respons, is_fallback).
+    """
+    action = arguments.get("action")
+    if not isinstance(action, str) or not action:
+        log.warning("[TOOL] move_robot dipanggil tanpa action yang valid.")
+        print("[TOOL] move_robot dipanggil tanpa action yang valid.")
+        return "Maaf, saya tidak mengenali gerakan yang diminta.", False
+
+    direction = _normalize_direction(action, arguments.get("direction") or "")
+    repeat = _normalize_repeat(arguments.get("repeat", 1))
+    success = execute_robot_action(action, direction, repeat)
+    move_desc = _describe_move(action, direction, repeat)
+    if success:
+        return "Saya sudah melakukan gerakan {} untuk Anda!".format(move_desc), False
+    return "Maaf, gerakan {} gagal dilakukan.".format(move_desc), False
+
+
+# Daftarkan tool bawaan ke registry
+tool_executors["move_robot"] = _execute_move_robot
+
+
+def add_tool(name, description, parameters, executor):
+    """Tambahkan tool function-calling baru ke daftar tools.
+
+    Melakukan pengecekan: jika tool dengan 'name' yang sama sudah ada
+    di daftar, tool baru tidak ditambahkan (mencegah duplikat).
+
+    Args:
+        name (str): Nama tool, harus unik antar tool.
+        description (str): Deskripsi kapan tool ini dipakai (dibaca oleh LLM).
+        parameters (dict): Skema parameter JSON untuk tool ini,
+            contoh: {"type": "object", "properties": {...}, "required": [...]}.
+        executor (callable): Fungsi yang menerima dict argumen dan
+            mengembalikan tuple (teks_respons, is_fallback).
+
+    Returns:
+        bool: True bila tool baru ditambahkan, False bila sudah ada (dilewati).
+    """
+    for tool in tools:
+        func = tool.get("function") or {}
+        if func.get("name") == name:
+            log.info("[TOOL] Tool '{}' sudah ada, dilewati.".format(name))
+            print("[TOOL] Tool '{}' sudah ada, dilewati.".format(name))
+            return False
+
+    new_tool = {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": parameters,
+        }
+    }
+    tools.append(new_tool)
+    tool_executors[name] = executor
+    log.info("[TOOL] Tool baru ditambahkan: {}".format(name))
+    print("[TOOL] Tool baru ditambahkan: {}".format(name))
+    return True
+
+
+def dispatch_tool_call(tool_name, arguments):
+    """Jalankan executor untuk tool yang dipanggil oleh LLM.
+
+    Mengembalikan tuple (teks_respons, is_fallback), atau None bila
+    tool tidak dikenal di registry.
+    """
+    executor = tool_executors.get(tool_name)
+    if executor is None:
+        log.warning("[TOOL] Tool tidak dikenal: {}".format(tool_name))
+        print("[TOOL] Tool tidak dikenal: {}".format(tool_name))
+        return None
+    try:
+        return executor(arguments)
+    except Exception as e:
+        log.error("[TOOL] Executor '{}' gagal: {}".format(tool_name, str(e)))
+        print("[TOOL] Executor '{}' gagal: {}".format(tool_name, str(e)))
+        return "Maaf, terjadi kesalahan saat menjalakan {}.".format(tool_name), False
 
 
 def ask_ollama_cloud(user_prompt, gender_context, expression_context=""):
@@ -139,18 +312,21 @@ def ask_ollama_cloud(user_prompt, gender_context, expression_context=""):
             if message.get("tool_calls"):
                 for tool_call in message["tool_calls"]:
                     func = (tool_call or {}).get("function") or {}
-                    if func.get("name") == "move_robot":
-                        try:
-                            arguments = json.loads(func.get("arguments") or "{}")
-                        except ValueError:
-                            log.error("[ERROR] Argumen tool_call bukan JSON: {}".format(func.get("arguments")))
-                            print("[ERROR] Argumen tool_call bukan JSON: {}".format(func.get("arguments")))
-                            continue
-                        action = arguments.get("action")
-                        success = execute_robot_action(action)
-                        if success:
-                            return "Saya sudah melakukan gerakan {} untuk Anda!".format(action), False
-                        return "Maaf, gerakan {} gagal dilakukan.".format(action), False
+                    tool_name = func.get("name")
+                    if not tool_name:
+                        continue
+                    try:
+                        arguments = json.loads(func.get("arguments") or "{}")
+                    except ValueError:
+                        log.error("[ERROR] Argumen tool_call bukan JSON: {}".format(func.get("arguments")))
+                        print("[ERROR] Argumen tool_call bukan JSON: {}".format(func.get("arguments")))
+                        continue
+                    result = dispatch_tool_call(tool_name, arguments)
+                    if result is None:
+                        continue
+                    response_text, is_fallback = result
+                    if response_text:
+                        return response_text, is_fallback
 
             content = message.get("content", "") or ""
             if not content.strip():
@@ -464,13 +640,13 @@ def random_dance(interactive=False):
                 log.info("[INFO] Tidak ada suara. Hitungan: {}/{}".format(no_speech_count, NO_SPEECH_LIMIT))
 
                 if no_speech_count >= NO_SPEECH_LIMIT:
-                    print("[AKSI] 3x tidak bersuara! Robot berjalan ke depan...")
-                    log.info("[AKSI] 3x ketidakber suara, berputar kanan 3 langkah.")
+                    print("[AKSI] 3x tidak bersuara! Robot berputar kanan...")
+                    log.info("[AKSI] 3x tidak bersuara, berputar kanan 3 langkah.")
                     try:
                         YanAPI.sync_do_tts(
-                            tts="Tidak ada suara. Saya akan berjalan.")
+                            tts="Tidak ada suara. Saya akan berputar.")
                         YanAPI.sync_play_motion(
-                            name="turn around", direction="left", repeat=3)
+                            name="turn around", direction="right", repeat=3)
                         YanAPI.sync_play_motion(name="reset")
                     except Exception as e:
                         log.error("[ERROR] Gagal gerakan 3-strike: {}".format(str(e)))

@@ -1,0 +1,17 @@
+# Dependensi Python untuk SDK YanAPI (REST API robot).
+# Di image resmi Yanshee (Raspberry Pi, Debian) sebagian besar paket ini
+# sudah tersedia. Pasang hanya jika modulnya benar-benar belum ada.
+#
+# OpenCV di robot ARM sebaiknya dari paket sistem:
+#   sudo apt-get install python3-opencv
+# Di laptop/PC, `pip install -r requirements.txt` sudah mencakup OpenCV.
+
+requests
+nest-asyncio
+
+# YanAPI membangun descriptor protobuf langsung; protobuf 4.x tidak kompatibel.
+protobuf>=3.6,<4
+
+# Wheel OpenCV lama (Python 3.5) berbeda dari wheel modern.
+opencv-python>=4.1,<4.2; python_version < "3.6"
+opencv-python>=4.5; python_version >= "3.6"

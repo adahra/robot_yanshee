@@ -6,6 +6,10 @@ __pycache__/
 venv/
 .env
 
+# Log runtime (dihasilkan config.setup_logging)
+yanshee.log
+*.log
+
 # Audio sementara (dihasilkan yanshee_detect.py)
 temp_input.wav
 temp_response.mp3
