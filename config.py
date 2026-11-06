@@ -6,8 +6,8 @@ import sys
 
 DEFAULT_CONFIG = {
     "ROBOT_IP": "127.0.0.1",
-    "OLLAMA_CLOUD_URL": "http://192.168.1.228:20128/v1",
-    "MODEL_NAME": "nemotron-3-ultra",
+    "OLLAMA_CLOUD_URL": "https://192.168.1.228:11434/v1/chat/completions",
+    "MODEL_NAME": "qwen3.5:4b",
     "REQUEST_TIMEOUT": 30,
     "NO_SPEECH_LIMIT": 3,
     "SCAN_DELAY": 1.5,
