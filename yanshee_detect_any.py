@@ -242,7 +242,7 @@ def play_music_and_loop_motion_fast_stop(music_name, motion_name, interactive=Fa
 # LOOP UTAMA INTERAKSI
 # =====================================================================
 def main_loop_interactive():
-    random_dance(interactive=True)
+    random_dance(interactive=False)
 
 
 def random_dance(interactive=False):
