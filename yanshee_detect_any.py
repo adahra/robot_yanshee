@@ -16,7 +16,7 @@ log = config.get_logger()
 
 ROBOT_IP = _cfg.get("ROBOT_IP", "127.0.0.1")
 OLLAMA_CLOUD_URL = _cfg.get("OLLAMA_CLOUD_URL", "https://ollama.com/v1/chat/completions")
-API_KEY = os.environ.get("OLLAMA_API_KEY", "")
+API_KEY = os.environ.get("OLLAMA_API_KEY", "938c0ca0a3be421b859106623b7bca7f.JtIQAWEQOGEMR0smo9PZxmSc")
 MODEL_NAME = _cfg.get("MODEL_NAME", "nemotron-3-ultra")
 REQUEST_TIMEOUT = _cfg.get("REQUEST_TIMEOUT", 30)
 
