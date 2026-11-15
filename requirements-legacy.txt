@@ -1,0 +1,11 @@
+# Ekstra untuk varian lama/off-robot (yanshee_detect.py): mikrofon lokal,
+# Groq Whisper, dan gTTS. Tidak diperlukan saat menjalankan robot.
+#
+# PyAudio butuh PortAudio saat instalasi (Linux):
+#   sudo apt-get install portaudio19-dev python3-dev
+
+-r requirements.txt
+
+pyaudio>=0.2.11
+gTTS>=2.0.4,<3
+playsound==1.2.2

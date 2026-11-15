@@ -228,8 +228,15 @@ def ask_ollama_cloud(user_prompt, gender_context):
 
             if message.get("tool_calls"):
                 for tool_call in message["tool_calls"]:
-                    if tool_call["function"]["name"] == "move_robot":
-                        arguments = json.loads(tool_call["function"]["arguments"])
+                    func = (tool_call or {}).get("function") or {}
+                    tool_name = func.get("name")
+                    if tool_name == "move_robot":
+                        try:
+                            arguments = json.loads(func.get("arguments") or "{}")
+                        except ValueError as e:
+                            log.error("[ERROR] Gagal parse arguments tool_call: {}".format(str(e)))
+                            print("[ERROR] Gagal parse arguments tool_call: {}".format(str(e)))
+                            continue
                         action = arguments.get("action")
                         execute_robot_action(action)
                         return "Saya sudah melakukan gerakan {} untuk Anda!".format(action), False
@@ -269,6 +276,16 @@ def main_loop():
 
         try:
             face_count = YanAPI.sync_do_face_recognition_value(type="quantity")
+            if isinstance(face_count, dict):
+                data = face_count.get("data")
+                if isinstance(data, dict):
+                    face_count = data.get("quantity", 0)
+                else:
+                    face_count = data or 0
+            try:
+                face_count = int(face_count or 0)
+            except (TypeError, ValueError):
+                face_count = 0
         except Exception as e:
             log.error("[ERROR] Gagal deteksi wajah: {}".format(str(e)))
             face_count = 0
@@ -279,6 +296,13 @@ def main_loop():
 
             try:
                 gender = YanAPI.sync_do_face_recognition_value(type="gender")
+                if isinstance(gender, dict):
+                    data = gender.get("data")
+                    if isinstance(data, dict):
+                        gender = data.get("gender", "")
+                    else:
+                        gender = data or ""
+                gender = str(gender or "").lower()
             except Exception as e:
                 log.error("[ERROR] Gagal deteksi gender: {}".format(str(e)))
                 gender = ""
