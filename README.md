@@ -92,10 +92,14 @@ export GROQ_API_KEY="..."     # hanya untuk yanshee_detect.py (Whisper)
 .
 ├── yanshee_detect_any.py       # Skrip utama: gerbang gestur + interaksi AI
 ├── yanshee_detect.py           # Varian lama/off-robot (pyaudio, Groq, gTTS)
+├── routine_manager.py          # Validasi & persistensi rutinitas gerakan dinamis
+├── mcp_yanapi_server.py       # MCP server stdio untuk fungsi YanAPI
 ├── config.py                   # Konfigurasi, validasi, dan logging
 ├── config.json                 # Nilai runtime (override default)
+├── custom_tools.json           # Rutinitas gerakan kustom (dibuat runtime, opsional)
 ├── requirements.txt            # Dependensi SDK YanAPI
 ├── requirements-legacy.txt     # Dependensi tambahan varian lama
+├── requirements-mcp.txt        # Dependensi MCP server
 ├── YanAPI.py                   # SDK pemanggil endpoint RESTful Yanshee
 ├── lib_ukit/                   # Transport protobuf untuk YanAPI
 │   ├── __init__.py

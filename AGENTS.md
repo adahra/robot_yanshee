@@ -3,8 +3,10 @@
 Onboard UBTECH Yanshee scripts (run on the robot's Raspberry Pi, Debian). No build, tests, lint, or CI.
 
 ## Entry points
-- `yanshee_detect_any.py` — current/main. Gesture gate: `gesture_control_loop()` (`thumbsup` → `main_loop_interactive()` → `random_dance(interactive=True)`; `thumbsdown` → idle). Uses onboard mic/TTS via `YanAPI.sync_do_voice_iat_value()` / `sync_do_tts()`. Stdlib only (`json`, `urllib`, `time`, `random`) + `YanAPI`.
+- `yanshee_detect_any.py` — current/main. Gesture gate: `gesture_control_loop()` (`thumbsup`/`good` → `main_loop_interactive()` → `random_dance(interactive=True)`; `thumbsdown`/`bad` → idle). Uses onboard mic/TTS via `YanAPI.sync_do_voice_iat_value()` / `sync_do_tts()`. Stdlib only (`json`, `urllib`, `time`, `random`) + `YanAPI`. Mendukung meta-tool `create_motion_routine` dan persistensi `custom_tools.json`.
 - `yanshee_detect.py` — legacy/off-robot variant. Local mic via `pyaudio`, STT via Groq Whisper, TTS via `gTTS`+`playsound`. Needs `pip install -r requirements-legacy.txt`. Deprecated; keep behavior changes minimal and documented.
+- `routine_manager.py` — validasi & persistensi rutinitas gerakan dinamis (`custom_tools.json`).
+- `mcp_yanapi_server.py` — MCP server stdio yang mengekspor fungsi YanAPI sebagai tools.
 - `config.py` / `config.json` — runtime config, validation, logging (`load_config`, `get_config`, `get_logger`). `config.json` overrides defaults; invalid values fall back to `DEFAULT_CONFIG`.
 - `YanAPI.py` — vendored UBTECH REST SDK (`http://<robot_ip>:9090/v1/`). Do not edit or reformat. It imports `requests`, `nest_asyncio`, `cv2`, `lib_ukit` (protobuf).
 - `lib_ukit/` — protobuf transport for `YanAPI`. Do not touch.

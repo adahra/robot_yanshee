@@ -6,6 +6,7 @@ import urllib.request
 import urllib.error
 import YanAPI  # Menggunakan file SDK Python
 import config  # Konfigurasi dan logging
+import routine_manager  # Validasi & persistensi rutinitas gerakan dinamis
 
 
 # =====================================================================
@@ -16,7 +17,7 @@ log = config.get_logger()
 
 ROBOT_IP = _cfg.get("ROBOT_IP", "127.0.0.1")
 OLLAMA_CLOUD_URL = _cfg.get("OLLAMA_CLOUD_URL", "https://ollama.com/v1/chat/completions")
-API_KEY = os.environ.get("OLLAMA_API_KEY", "938c0ca0a3be421b859106623b7bca7f.JtIQAWEQOGEMR0smo9PZxmSc")
+API_KEY = os.environ.get("OLLAMA_API_KEY", "")
 MODEL_NAME = _cfg.get("MODEL_NAME", "nemotron-3-ultra")
 REQUEST_TIMEOUT = _cfg.get("REQUEST_TIMEOUT", 30)
 
@@ -202,6 +203,223 @@ def _execute_move_robot(arguments):
 tool_executors["move_robot"] = _execute_move_robot
 
 
+# =====================================================================
+# DYNAMIC TOOL CREATION (RUTINITAS GERAKAN)
+# =====================================================================
+THUMBS_UP_GESTURES = ("thumbsup", "good")
+THUMBS_DOWN_GESTURES = ("thumbsdown", "bad")
+
+
+def _normalize_gesture_name(gesture):
+    return (gesture or "").strip().lower()
+
+
+def _create_routine_runner(steps):
+    """Buat runner (callable) yang mengeksekusi daftar langkah rutinitas.
+
+    Mengembalikan fungsi tanpa argumen yang mengembalikan True bila semua
+    langkah berhasil, False bila gagal di tengah jalan.
+    """
+    clean_steps = steps if isinstance(steps, (list, tuple)) else []
+
+    def run():
+        try:
+            for step in clean_steps:
+                if not isinstance(step, dict):
+                    continue
+                action = step.get("action")
+                direction = step.get("direction", "")
+                repeat = step.get("repeat", 1)
+                success = execute_robot_action(action, direction, repeat)
+                if not success:
+                    log.warning("[ROUTINE] Langkah '{}' gagal. Reset posisi.".format(action))
+                    try:
+                        YanAPI.sync_play_motion(name="reset")
+                    except Exception:
+                        pass
+                    return False
+                delay = step.get("delay", 0.0)
+                try:
+                    delay = float(delay)
+                except (TypeError, ValueError):
+                    delay = 0.0
+                if delay and delay > 0:
+                    time.sleep(delay)
+            return True
+        except Exception as e:
+            log.error("[ROUTINE] Rutinitas gagal: {}".format(str(e)))
+            try:
+                YanAPI.sync_play_motion(name="reset")
+            except Exception:
+                pass
+            return False
+
+    return run
+
+
+def _create_routine_executor(routine_def):
+    """Buat runner dari definisi rutinitas (dict)."""
+    steps = []
+    if isinstance(routine_def, dict):
+        steps = routine_def.get("steps", [])
+    elif isinstance(routine_def, (list, tuple)):
+        steps = routine_def
+    return _create_routine_runner(steps)
+
+
+def _make_routine_tool_executor(name, steps):
+    runner = _create_routine_runner(steps)
+
+    def executor(arguments=None):
+        try:
+            success = runner()
+            if success:
+                return "Rutinitas '{}' selesai dijalankan.".format(name), False
+            return "Rutinitas '{}' gagal di tengah jalan.".format(name), False
+        except Exception as e:
+            log.error("[ROUTINE] Executor '{}' gagal: {}".format(name, str(e)))
+            return "Maaf, terjadi kesalahan saat menjalankan {}.".format(name), False
+
+    return executor
+
+
+def register_custom_routine(routine_def):
+    """Daftarkan rutinitas kustom ke skema tools dan registry executor."""
+    if not isinstance(routine_def, dict):
+        return False
+    name = routine_def.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return False
+    name = name.strip()
+    if name in ("move_robot", "create_motion_routine"):
+        return False
+
+    description = routine_def.get("description", "")
+    if not isinstance(description, str):
+        description = str(description)
+    steps = routine_def.get("steps", [])
+    if not isinstance(steps, (list, tuple)):
+        return False
+
+    # Hapus definisi lama dengan nama yang sama (update in-place)
+    for i in range(len(tools) - 1, -1, -1):
+        func = (tools[i].get("function") or {})
+        if func.get("name") == name:
+            del tools[i]
+    if name in tool_executors:
+        del tool_executors[name]
+
+    new_tool = {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    }
+    tools.append(new_tool)
+    tool_executors[name] = _make_routine_tool_executor(name, steps)
+    log.info("[TOOL] Rutinitas kustom terdaftar: {}".format(name))
+    return True
+
+
+def _execute_create_motion_routine(arguments=None):
+    """Meta-tool untuk membuat rutinitas gerakan baru."""
+    if arguments is None:
+        arguments = {}
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments or "{}")
+        except (ValueError, TypeError):
+            return "Maaf, argumen create_motion_routine tidak valid.", False
+    if not isinstance(arguments, dict):
+        arguments = {}
+
+    name = arguments.get("name")
+    description = arguments.get("description")
+    steps = arguments.get("steps")
+
+    ok, msg, clean_steps = routine_manager.validate_routine(
+        name, description, steps, VALID_ACTIONS, ACTION_DIRECTIONS)
+    if not ok:
+        return msg, False
+
+    if name in ("move_robot", "create_motion_routine"):
+        return "Nama rutinitas '{}' tidak diizinkan.".format(name), False
+
+    save_ok, save_msg = routine_manager.save_custom_routine(
+        name, description, clean_steps, "custom_tools.json")
+    if not save_ok:
+        return save_msg, False
+
+    routine_def = {
+        "name": name,
+        "description": description,
+        "steps": clean_steps,
+    }
+    register_custom_routine(routine_def)
+    return "Rutinitas '{}' berhasil dibuat dan disimpan.".format(name), False
+
+
+# Daftarkan meta-tool create_motion_routine
+tools.append({
+    "type": "function",
+    "function": {
+        "name": "create_motion_routine",
+        "description": "Buat rutinitas gerakan baru dari urutan langkah gerakan robot.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Nama rutinitas (snake_case, unik)."
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Deskripsi fungsi rutinitas untuk LLM."
+                },
+                "steps": {
+                    "type": "array",
+                    "description": "Daftar langkah gerakan.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "action": {"type": "string", "description": "Jenis gerakan."},
+                            "direction": {"type": "string", "description": "Arah gerakan."},
+                            "repeat": {"type": "integer", "description": "Jumlah pengulangan."},
+                            "delay": {"type": "number", "description": "Jeda setelah langkah (detik)."}
+                        },
+                        "required": ["action"]
+                    }
+                }
+            },
+            "required": ["name", "description", "steps"]
+        }
+    }
+})
+tool_executors["create_motion_routine"] = _execute_create_motion_routine
+
+
+def load_and_register_custom_routines(filepath="custom_tools.json"):
+    """Muat rutinitas tersimpan dan daftarkan ke runtime."""
+    routines = routine_manager.load_custom_routines(filepath)
+    for routine_name, routine_def in (routines or {}).items():
+        if isinstance(routine_def, dict):
+            register_custom_routine(routine_def)
+    return routines
+
+
+# Muat rutinitas tersimpan saat modul di-import (aman jika file tidak ada)
+try:
+    load_and_register_custom_routines("custom_tools.json")
+except Exception as e:
+    log.error("[TOOL] Gagal memuat rutinitas tersimpan: {}".format(str(e)))
+
+
 def add_tool(name, description, parameters, executor):
     """Tambahkan tool function-calling baru ke daftar tools.
 
@@ -315,12 +533,18 @@ def ask_ollama_cloud(user_prompt, gender_context, expression_context=""):
                     tool_name = func.get("name")
                     if not tool_name:
                         continue
-                    try:
-                        arguments = json.loads(func.get("arguments") or "{}")
-                    except ValueError:
-                        log.error("[ERROR] Argumen tool_call bukan JSON: {}".format(func.get("arguments")))
-                        print("[ERROR] Argumen tool_call bukan JSON: {}".format(func.get("arguments")))
-                        continue
+                    raw_arguments = func.get("arguments")
+                    if isinstance(raw_arguments, dict):
+                        arguments = raw_arguments
+                    else:
+                        try:
+                            arguments = json.loads(raw_arguments or "{}")
+                        except (ValueError, TypeError):
+                            log.error("[ERROR] Argumen tool_call bukan JSON: {}".format(raw_arguments))
+                            print("[ERROR] Argumen tool_call bukan JSON: {}".format(raw_arguments))
+                            continue
+                    if not isinstance(arguments, dict):
+                        arguments = {}
                     result = dispatch_tool_call(tool_name, arguments)
                     if result is None:
                         continue
@@ -366,7 +590,7 @@ def play_music_and_loop_motion_fast_stop(music_name, motion_name, interactive=Fa
             except Exception as e:
                 log.error("[ERROR] Gagal membaca gestur saat dance: {}".format(str(e)))
                 current_gesture = ""
-            if (current_gesture or "").lower() == "thumbsdown":
+            if (current_gesture or "").lower() in ("thumbsdown", "bad"):
                 print(
                     "[STOP] Gestur ThumbsDown terdeteksi. Menghentikan mode interaktif...")
                 log.info("[STOP] Gestur ThumbsDown terdeteksi. Menghentikan mode interaktif...")
@@ -417,7 +641,7 @@ def play_music_and_loop_motion_fast_stop(music_name, motion_name, interactive=Fa
 # LOOP UTAMA INTERAKSI
 # =====================================================================
 def main_loop_interactive():
-    random_dance(interactive=False)
+    random_dance(interactive=True)
 
 
 def random_dance(interactive=False):
@@ -461,7 +685,7 @@ def random_dance(interactive=False):
                 log.error("[ERROR] Gagal membaca gestur: {}".format(str(e)))
                 current_gesture = ""
             # Pakai .lower()
-            if (current_gesture or "").lower() == "thumbsdown":
+            if (current_gesture or "").lower() in ("thumbsdown", "bad"):
                 print(
                     "[STOP] Gestur ThumbsDown terdeteksi. Menghentikan mode interaktif...")
                 log.info("[STOP] Gestur ThumbsDown terdeteksi. Menghentikan mode interaktif...")
@@ -753,7 +977,7 @@ def gesture_control_loop():
             # Normalisasi ke huruf kecil
             gesture_lower = (gesture or "").lower()
 
-            if gesture_lower == "thumbsup":
+            if gesture_lower in ("thumbsup", "good"):
                 print("[AKSI] Gestur ThumbsUp terdeteksi! Memulai interaksi AI...")
                 log.info("[AKSI] ThumbsUp terdeteksi, memulai mode interaktif.")
                 try:
@@ -768,7 +992,7 @@ def gesture_control_loop():
                 except Exception as e:
                     log.error("[ERROR] Gagal main_loop_interactive: {}".format(str(e)))
 
-            elif gesture_lower == "thumbsdown":
+            elif gesture_lower in ("thumbsdown", "bad"):
                 print("[AKSI] Gestur ThumbsDown terdeteksi! Robot dalam posisi Idle.")
                 log.info("[AKSI] ThumbsDown terdeteksi, robot idle.")
                 try:

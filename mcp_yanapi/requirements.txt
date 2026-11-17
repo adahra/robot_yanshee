@@ -1,0 +1,12 @@
+# Dependensi MCP YanAPI (menggunakan mcp Python SDK v1)
+
+# FastMCP dari MCP SDK (v1)
+fastmcp
+
+# Backport CLI & app yang dipakai mcp v1
+mcp<2
+
+# YanAPI core (sudah ada di requirements.txt)
+
+# Tambahan untuk server (asyncio, threading)
+# Semua sudah di stdlib

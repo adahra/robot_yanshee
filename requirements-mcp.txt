@@ -1,0 +1,13 @@
+# Dependensi untuk MCP server YanAPI
+# Cepat: pip install -r requirements-mcp.txt
+
+# Server MCP
+fastmcp>=0.1.0
+
+# Kepas ulang protokol JSON-RPC2 for stdio (implementasi MCP resmi)
+mcp>=1.0.0
+
+# Dasar asyncio & threading (sudah ada di stdlib)
+
+# Semua yang sudah diinstal di robot ARM:
+# requests, nest-asyncio, cv2, protobuf, lib_ukit
